@@ -2,14 +2,16 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/sirupsen/logrus"
+    "github.com/olekukonko/tablewriter"
+    "github.com/olekukonko/tablewriter/renderer"
+	"github.com/olekukonko/tablewriter/tw"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +30,7 @@ func ensureStorage() map[string]CommandEntry {
 	}
 	data, err := ioutil.ReadFile(storagePath)
 	if err != nil {
-		log.Fatalf("Failed to read storage: %v", err)
+		logrus.Fatalf("Failed to read storage: %v", err)
 	}
 	var cmds map[string]CommandEntry
 	_ = json.Unmarshal(data, &cmds)
@@ -41,6 +43,12 @@ func saveStorage(cmds map[string]CommandEntry) {
 }
 
 func main() {
+	// Set up logrus formatter
+    logrus.SetFormatter(&logrus.TextFormatter{
+        FullTimestamp:   true,
+        TimestampFormat: "2006-01-02 15:04:05",
+    })
+
 	rootCmd := &cobra.Command{
 		Use:   "term",
 		Short: "Save, manage, and run your frequently used terminal commands easily.",
@@ -59,20 +67,40 @@ func main() {
 				Command: commandStr,
 			}
 			saveStorage(cmds)
-			fmt.Println("Saved:", name)
+			logrus.Infof("Saved: %s", name)
 		},
 	})
 
-	rootCmd.AddCommand(&cobra.Command{
-		Use:   "list",
-		Short: "List saved commands",
-		Run: func(cmd *cobra.Command, args []string) {
-			cmds := ensureStorage()
-			for name, entry := range cmds {
-				fmt.Printf("%s: %s\n", name, entry.Command)
-			}
-		},
-	})
+    rootCmd.AddCommand(&cobra.Command{
+        Use:   "list",
+        Short: "List saved commands",
+        Run: func(cmd *cobra.Command, args []string) {
+            cmds := ensureStorage()
+
+            // Prepare data slice
+            data := [][]string{}
+            for name, entry := range cmds {
+                data = append(data, []string{name, entry.Command})
+            }
+
+            table := tablewriter.NewTable(os.Stdout,
+                tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
+                    Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On}},
+                })),
+                tablewriter.WithConfig(tablewriter.Config{
+                    Row: tw.CellConfig{
+                        Formatting: tw.CellFormatting{MergeMode: tw.MergeBoth},
+                        Alignment:  tw.CellAlignment{PerColumn: []tw.Align{tw.AlignLeft, tw.AlignLeft}},
+                    },
+                }),
+            )
+
+            table.Header([]string{"Name", "Command"})
+            table.Bulk(data)
+            table.Render()
+        },
+    })
+
 
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "run [name] [args...]",
@@ -85,7 +113,7 @@ func main() {
 			cmds := ensureStorage()
 			entry, ok := cmds[name]
 			if !ok {
-				fmt.Println("Command not found:", name)
+				logrus.Warnf("Command not found: %s", name)
 				return
 			}
 
@@ -94,21 +122,20 @@ func main() {
 				expanded = strings.Replace(expanded, "{}", arg, 1)
 			}
 
-			fmt.Println("Running:", expanded)
+			logrus.Infof("Running: %s", expanded)
 			parts := strings.Fields(expanded)
 			c := exec.Command(parts[0], parts[1:]...)
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
 			c.Stdin = os.Stdin
 			if err := c.Run(); err != nil {
-				fmt.Println("Error:", err)
+				logrus.Errorf("Error: %v", err)
 			}
 		},
 	})
 
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		logrus.Errorf("Error executing command: %v", err)
 		os.Exit(1)
 	}
 }
-
